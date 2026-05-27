@@ -13,6 +13,14 @@ def test_calculate_blur_score_is_lower_for_blurry_image(tmp_path):
     assert calculate_blur_score(sharp) > calculate_blur_score(blurry)
 
 
+def test_calculate_blur_score_supports_japanese_path(tmp_path):
+    image_path = tmp_path / "新しいフォルダー" / "画像.jpeg"
+    image_path.parent.mkdir()
+    write_test_image(image_path)
+
+    assert calculate_blur_score(image_path) > 0
+
+
 def test_blurry_detector_creates_single_item_groups():
     candidates = [
         DetectionCandidate(1, "sharp.jpg", "image", "sha-a", 10, blur_score=500.0),

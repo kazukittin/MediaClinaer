@@ -142,3 +142,17 @@ def test_detection_service_saves_blurry_image_groups(tmp_path):
 
     assert result.blurry_group_count == 1
     assert result.blurry_item_count == 1
+
+    connection = sqlite3.connect(database.database_path)
+    try:
+        selected = connection.execute(
+            """
+            SELECT dgi.selected_by_default
+            FROM detection_group_items dgi
+            INNER JOIN detection_groups dg ON dg.id = dgi.detection_group_id
+            WHERE dg.group_type = 'blurry_image'
+            """
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert selected == 1

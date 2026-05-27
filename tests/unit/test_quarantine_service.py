@@ -34,6 +34,10 @@ def test_quarantine_service_moves_selected_duplicate_candidates(tmp_path):
     assert result.total_count == 1
     assert result.completed_count == 1
     assert result.failed_count == 0
+    assert len(result.items) == 1
+    assert result.items[0].status == "completed"
+    assert result.items[0].original_path == str(duplicate_file)
+    assert result.items[0].quarantined_path.endswith("b.jpg")
     assert keep_file.exists()
     assert not duplicate_file.exists()
     assert result.manifest_path.exists()
@@ -77,4 +81,6 @@ def test_quarantine_service_deletes_readonly_duplicate_after_copy(tmp_path):
     ).quarantine_selected_defaults(scan_result.session_id)
 
     assert result.completed_count == 1
+    assert result.items[0].status == "completed"
+    assert result.items[0].original_path == str(duplicate_file)
     assert not duplicate_file.exists()

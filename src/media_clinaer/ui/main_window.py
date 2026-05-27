@@ -147,10 +147,10 @@ class MainWindow(QMainWindow):
                 self.logger,
                 self.config,
             ).detect_duplicates(scan_result.session_id)
-            summaries = ResultService(self.database).list_detection_group_summaries(
+            details = ResultService(self.database).list_detection_group_details(
                 scan_result.session_id
             )
-            return scan_result, detection_result, summaries
+            return scan_result, detection_result, details
 
         worker = FunctionWorker(run_scan_and_detection)
         worker.signals.succeeded.connect(self._scan_finished)
@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
         self.thread_pool.start(worker)
 
     def _scan_finished(self, payload: object) -> None:
-        scan_result, detection_result, summaries = payload
+        scan_result, detection_result, details = payload
         self.current_scan_session_id = scan_result.session_id
         self.config.ui.last_opened_result_session_id = scan_result.session_id
         self.config_manager.save(self.config)
@@ -176,18 +176,33 @@ class MainWindow(QMainWindow):
             f"類似画像候補ファイル: {detection_result.similar_item_count} 件",
             f"ブレ画像候補: {detection_result.blurry_item_count} 件",
         ]
-        for summary in summaries:
-            if summary.group_type == "duplicate_image":
-                label = "重複画像"
-            elif summary.group_type == "duplicate_video":
-                label = "重複映像"
-            elif summary.group_type == "blurry_image":
-                label = "ブレ画像"
-            else:
-                label = "類似画像"
+        lines.append("")
+        lines.append("検出グループ詳細")
+        for index, detail in enumerate(details, start=1):
+            summary = detail.summary
+            label = self._group_label(summary.group_type)
             lines.append(
-                f"- {label}: {summary.item_count} 件中 {summary.selected_count} 件を隔離候補"
+                f"[{index}] {label}: {summary.item_count} 件中 "
+                f"{summary.selected_count} 件を隔離候補"
             )
+            lines.append(f"  理由: {summary.reason}")
+            for item in detail.items:
+                selected_label = "隔離候補" if item.selected_by_default else "保持"
+                size_label = self._format_size(item.size_bytes)
+                blur_label = (
+                    f", blur={item.blur_score:.2f}"
+                    if item.blur_score is not None
+                    else ""
+                )
+                phash_label = (
+                    f", pHash={item.perceptual_hash}"
+                    if item.perceptual_hash is not None
+                    else ""
+                )
+                lines.append(
+                    f"  - {selected_label}: {item.path} "
+                    f"({size_label}, 更新={item.modified_at}{blur_label}{phash_label})"
+                )
         self.results.setPlainText("\n".join(lines))
         candidate_count = (
             detection_result.duplicate_item_count
@@ -197,6 +212,22 @@ class MainWindow(QMainWindow):
         self.has_quarantine_candidates = candidate_count > 0
         self.quarantine_button.setEnabled(self.has_quarantine_candidates)
         self.status_label.setText("スキャンと完全重複検出が完了しました。")
+
+    def _group_label(self, group_type: str) -> str:
+        if group_type == "duplicate_image":
+            return "重複画像"
+        if group_type == "duplicate_video":
+            return "重複映像"
+        if group_type == "blurry_image":
+            return "ブレ画像"
+        return "類似画像"
+
+    def _format_size(self, size_bytes: int) -> str:
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        if size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        return f"{size_bytes / 1024 / 1024:.1f} MB"
 
     def _start_quarantine(self) -> None:
         if self.current_scan_session_id is None:
@@ -233,9 +264,40 @@ class MainWindow(QMainWindow):
         self.results.appendPlainText(f"成功: {result.completed_count} 件")
         self.results.appendPlainText(f"失敗: {result.failed_count} 件")
         self.results.appendPlainText(f"manifest: {result.manifest_path}")
+
+        completed_items = [item for item in result.items if item.status == "completed"]
+        failed_items = [item for item in result.items if item.status != "completed"]
+
+        if completed_items:
+            self.results.appendPlainText("")
+            self.results.appendPlainText("成功したファイル")
+            for item in completed_items:
+                self.results.appendPlainText(f"- 元: {item.original_path}")
+                self.results.appendPlainText(f"  隔離先: {item.quarantined_path}")
+
+        if failed_items:
+            self.results.appendPlainText("")
+            self.results.appendPlainText("失敗したファイル")
+            for item in failed_items:
+                self.results.appendPlainText(
+                    f"- {self._quarantine_status_label(item.status)}: {item.original_path}"
+                )
+                self.results.appendPlainText(f"  隔離先: {item.quarantined_path}")
+                if item.error_message:
+                    self.results.appendPlainText(f"  理由: {item.error_message}")
+
         self.status_label.setText("隔離処理が完了しました。")
         self.has_quarantine_candidates = False
         self.quarantine_button.setEnabled(False)
+
+    def _quarantine_status_label(self, status: str) -> str:
+        if status == "copy_failed":
+            return "コピー失敗"
+        if status == "verify_failed":
+            return "検証失敗"
+        if status == "delete_failed":
+            return "元ファイル削除失敗"
+        return status
 
     def _worker_failed(self, message: str) -> None:
         self.status_label.setText("処理に失敗しました。")

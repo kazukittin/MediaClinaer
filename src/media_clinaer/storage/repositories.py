@@ -348,6 +348,7 @@ class DetectionRepository:
             )
             group_id = int(cursor.lastrowid)
             for index, item in enumerate(group.items):
+                should_select = group.group_type == "blurry_image" or index > 0
                 self.connection.execute(
                     """
                     INSERT INTO detection_group_items (
@@ -361,8 +362,8 @@ class DetectionRepository:
                     (
                         group_id,
                         item.media_file_id,
-                        "keep" if index == 0 else "quarantine_candidate",
-                        0 if index == 0 else 1,
+                        "quarantine_candidate" if should_select else "keep",
+                        1 if should_select else 0,
                     ),
                 )
 
@@ -395,6 +396,29 @@ class DetectionRepository:
             ORDER BY dg.group_type, dg.id
             """,
             (scan_session_id,),
+        ).fetchall()
+
+    def list_group_items(self, detection_group_id: int) -> list[sqlite3.Row]:
+        self.connection.row_factory = sqlite3.Row
+        return self.connection.execute(
+            """
+            SELECT
+                mf.id AS media_file_id,
+                mf.path,
+                mf.media_type,
+                mf.size_bytes,
+                mf.modified_at,
+                mf.sha256,
+                mf.perceptual_hash,
+                mf.blur_score,
+                dgi.recommended_action,
+                dgi.selected_by_default
+            FROM detection_group_items dgi
+            INNER JOIN media_files mf ON mf.id = dgi.media_file_id
+            WHERE dgi.detection_group_id = ?
+            ORDER BY dgi.selected_by_default DESC, mf.path
+            """,
+            (detection_group_id,),
         ).fetchall()
 
     def _now(self) -> str:

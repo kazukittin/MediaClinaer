@@ -15,12 +15,22 @@ from media_clinaer.storage.repositories import QuarantineRepository
 
 
 @dataclass(frozen=True)
+class QuarantineItemDetail:
+    media_file_id: int
+    original_path: str
+    quarantined_path: str
+    status: str
+    error_message: str | None
+
+
+@dataclass(frozen=True)
 class QuarantineResult:
     scan_session_id: int
     total_count: int
     completed_count: int
     failed_count: int
     manifest_path: Path
+    items: list[QuarantineItemDetail]
 
 
 class QuarantineService:
@@ -91,12 +101,23 @@ class QuarantineService:
             manifest_path = manifest_writer.write(session_dir, outcomes)
             completed_count = sum(1 for outcome in outcomes if outcome.status == "completed")
             failed_count = len(outcomes) - completed_count
+            items = [
+                QuarantineItemDetail(
+                    media_file_id=outcome.plan.candidate.media_file_id,
+                    original_path=str(outcome.plan.candidate.original_path),
+                    quarantined_path=str(outcome.plan.quarantined_path),
+                    status=outcome.status,
+                    error_message=outcome.error_message,
+                )
+                for outcome in outcomes
+            ]
             return QuarantineResult(
                 scan_session_id=scan_session_id,
                 total_count=len(outcomes),
                 completed_count=completed_count,
                 failed_count=failed_count,
                 manifest_path=manifest_path,
+                items=items,
             )
         finally:
             connection.close()
