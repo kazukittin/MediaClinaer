@@ -44,10 +44,14 @@ class ResultService:
     def list_detection_group_summaries(
         self,
         scan_session_id: int,
+        max_groups: int | None = None,
     ) -> list[DetectionGroupSummary]:
         connection = self.database.connect()
         try:
-            rows = DetectionRepository(connection).list_group_summaries(scan_session_id)
+            rows = DetectionRepository(connection).list_group_summaries(
+                scan_session_id,
+                limit=max_groups,
+            )
             return [
                 DetectionGroupSummary(
                     group_id=int(row["id"]),
@@ -65,6 +69,7 @@ class ResultService:
     def list_detection_group_details(
         self,
         scan_session_id: int,
+        max_groups: int | None = None,
     ) -> list[DetectionGroupDetail]:
         connection = self.database.connect()
         try:
@@ -78,7 +83,10 @@ class ResultService:
                     item_count=int(row["item_count"]),
                     selected_count=int(row["selected_count"] or 0),
                 )
-                for row in repository.list_group_summaries(scan_session_id)
+                for row in repository.list_group_summaries(
+                    scan_session_id,
+                    limit=max_groups,
+                )
             ]
             items_by_group = {
                 summary.group_id: [

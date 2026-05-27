@@ -397,10 +397,16 @@ class DetectionRepository:
         )
         self.connection.commit()
 
-    def list_group_summaries(self, scan_session_id: int) -> list[sqlite3.Row]:
+    def list_group_summaries(
+        self,
+        scan_session_id: int,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
         self.connection.row_factory = sqlite3.Row
+        limit_sql = "" if limit is None else " LIMIT ?"
+        params: tuple[int, ...] = (scan_session_id,) if limit is None else (scan_session_id, limit)
         return self.connection.execute(
-            """
+            f"""
             SELECT
                 dg.id,
                 dg.group_type,
@@ -414,8 +420,9 @@ class DetectionRepository:
             WHERE dg.scan_session_id = ?
             GROUP BY dg.id, dg.group_type, dg.confidence, dg.reason
             ORDER BY dg.group_type, dg.id
+            {limit_sql}
             """,
-            (scan_session_id,),
+            params,
         ).fetchall()
 
     def list_group_items(self, detection_group_id: int) -> list[sqlite3.Row]:

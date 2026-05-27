@@ -12,4 +12,4 @@ def calculate_perceptual_hash(path: Path) -> str:
 
 
 def hash_distance(left: str, right: str) -> int:
-    return int(imagehash.hex_to_hash(left) - imagehash.hex_to_hash(right))
+    return (int(left, 16) ^ int(right, 16)).bit_count()

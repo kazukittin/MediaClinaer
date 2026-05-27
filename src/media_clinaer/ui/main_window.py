@@ -35,6 +35,7 @@ from media_clinaer.ui.workers import FunctionWorker
 
 PATH_ROLE = Qt.ItemDataRole.UserRole.value + 1
 MEDIA_TYPE_ROLE = Qt.ItemDataRole.UserRole.value + 2
+RESULT_DISPLAY_GROUP_LIMIT = 1000
 
 
 class MainWindow(QMainWindow):
@@ -189,9 +190,20 @@ class MainWindow(QMainWindow):
                 self.database,
                 self.logger,
                 self.config,
-            ).detect_duplicates(scan_result.session_id)
+            ).detect_duplicates(scan_result.session_id, progress_callback=progress)
+            progress(
+                {
+                    "phase": "loading_results",
+                    "message": "表示する候補一覧を読み込んでいます。",
+                    "total_files": 0,
+                    "processed_files": 0,
+                    "cache_used_count": scan_result.cache_used_count,
+                    "error_count": scan_result.error_count,
+                }
+            )
             details = ResultService(self.database).list_detection_group_details(
-                scan_result.session_id
+                scan_result.session_id,
+                max_groups=RESULT_DISPLAY_GROUP_LIMIT,
             )
             return scan_result, detection_result, details
 
@@ -222,6 +234,16 @@ class MainWindow(QMainWindow):
         ]
         lines.append("")
         lines.append("検出グループ詳細")
+        total_group_count = (
+            detection_result.duplicate_group_count
+            + detection_result.similar_group_count
+            + detection_result.blurry_group_count
+        )
+        if total_group_count > len(details):
+            lines.append(
+                f"表示件数が多いため、先頭 {len(details)} / {total_group_count} "
+                "グループだけ表示しています。"
+            )
         for index, detail in enumerate(details, start=1):
             summary = detail.summary
             label = self._group_label(summary.group_type)
@@ -295,6 +317,8 @@ class MainWindow(QMainWindow):
             return "画像と映像を解析しています。"
         if phase == "detecting":
             return "重複・類似・ブレを検出しています。"
+        if phase == "loading_results":
+            return "表示する候補一覧を読み込んでいます。"
         return "処理中です。"
 
     def _group_label(self, group_type: str) -> str:
