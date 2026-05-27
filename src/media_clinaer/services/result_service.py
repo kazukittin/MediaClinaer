@@ -18,6 +18,7 @@ class DetectionGroupSummary:
 
 @dataclass(frozen=True)
 class DetectionItemDetail:
+    detection_group_item_id: int
     media_file_id: int
     path: str
     media_type: str
@@ -82,6 +83,7 @@ class ResultService:
             items_by_group = {
                 summary.group_id: [
                     DetectionItemDetail(
+                        detection_group_item_id=int(row["detection_group_item_id"]),
                         media_file_id=int(row["media_file_id"]),
                         path=str(row["path"]),
                         media_type=str(row["media_type"]),
@@ -114,5 +116,19 @@ class ResultService:
                 )
                 for summary in summaries
             ]
+        finally:
+            connection.close()
+
+    def set_detection_item_selected(
+        self,
+        detection_group_item_id: int,
+        selected: bool,
+    ) -> None:
+        connection = self.database.connect()
+        try:
+            DetectionRepository(connection).update_group_item_selection(
+                detection_group_item_id,
+                selected,
+            )
         finally:
             connection.close()

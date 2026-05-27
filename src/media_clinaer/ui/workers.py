@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from inspect import signature
 from typing import TypeVar
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
@@ -10,6 +11,7 @@ T = TypeVar("T")
 
 
 class WorkerSignals(QObject):
+    progress = Signal(object)
     succeeded = Signal(object)
     failed = Signal(str)
     finished = Signal()
@@ -24,7 +26,10 @@ class FunctionWorker(QRunnable):
     @Slot()
     def run(self) -> None:
         try:
-            result = self.function()
+            if len(signature(self.function).parameters) == 1:
+                result = self.function(self.signals.progress.emit)
+            else:
+                result = self.function()
         except Exception as exc:
             self.signals.failed.emit(str(exc))
         else:

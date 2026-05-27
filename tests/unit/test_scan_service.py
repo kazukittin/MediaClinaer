@@ -18,14 +18,18 @@ def test_scan_service_saves_media_and_reuses_cache(tmp_path):
     database.initialize()
     logger = JsonLineLogger(tmp_path / "logs" / "app.log")
     service = ScanService(database, app_config, logger)
+    progress_events = []
 
-    first = service.scan([str(media_dir)])
+    first = service.scan([str(media_dir)], progress_callback=progress_events.append)
     second = service.scan([str(media_dir)])
 
     assert first.total_files == 1
     assert first.scanned_files == 1
     assert first.cache_used_count == 0
     assert second.cache_used_count == 1
+    assert progress_events[0].phase == "collecting"
+    assert any(event.phase == "scanning" for event in progress_events)
+    assert progress_events[-1].processed_files == 1
 
     connection = sqlite3.connect(database.database_path)
     try:

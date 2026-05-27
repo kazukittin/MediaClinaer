@@ -403,6 +403,7 @@ class DetectionRepository:
         return self.connection.execute(
             """
             SELECT
+                dgi.id AS detection_group_item_id,
                 mf.id AS media_file_id,
                 mf.path,
                 mf.media_type,
@@ -420,6 +421,21 @@ class DetectionRepository:
             """,
             (detection_group_id,),
         ).fetchall()
+
+    def update_group_item_selection(
+        self,
+        detection_group_item_id: int,
+        selected: bool,
+    ) -> None:
+        self.connection.execute(
+            """
+            UPDATE detection_group_items
+            SET selected_by_default = ?
+            WHERE id = ?
+            """,
+            (1 if selected else 0, detection_group_item_id),
+        )
+        self.connection.commit()
 
     def _now(self) -> str:
         return datetime.now(self.timezone).isoformat(timespec="seconds")

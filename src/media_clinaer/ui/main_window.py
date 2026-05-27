@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import QSize, Qt, QThreadPool
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -13,6 +14,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +30,10 @@ from media_clinaer.services.result_service import ResultService
 from media_clinaer.services.scan_service import ScanService
 from media_clinaer.storage.database import Database
 from media_clinaer.ui.workers import FunctionWorker
+
+
+PATH_ROLE = Qt.ItemDataRole.UserRole.value + 1
+MEDIA_TYPE_ROLE = Qt.ItemDataRole.UserRole.value + 2
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +54,8 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self.current_scan_session_id: int | None = config.ui.last_opened_result_session_id
         self.has_quarantine_candidates = False
+        self._populating_results_tree = False
+        self._thumbnail_cache: dict[str, QIcon] = {}
 
         self.setWindowTitle("MediaClinaer")
         self.setMinimumSize(880, 560)
@@ -96,12 +105,31 @@ class MainWindow(QMainWindow):
         self.results.setPlaceholderText("検出結果がここに表示されます。")
         layout.addWidget(self.results, stretch=1)
 
+        selection_label = QLabel("隔離候補の選択")
+        layout.addWidget(selection_label)
+
+        self.result_tree = QTreeWidget()
+        self.result_tree.setColumnCount(4)
+        self.result_tree.setHeaderLabels(["選択", "種類", "ファイル", "情報"])
+        self.result_tree.setRootIsDecorated(True)
+        self.result_tree.setAlternatingRowColors(True)
+        self.result_tree.setIconSize(QSize(72, 72))
+        layout.addWidget(self.result_tree, stretch=2)
+
+        self.preview_label = QLabel("画像を選択するとプレビューを表示します。")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(220)
+        self.preview_label.setStyleSheet("border: 1px solid #cccccc; background: #fafafa;")
+        layout.addWidget(self.preview_label, stretch=1)
+
         self.setCentralWidget(root)
 
         self.add_folder_button.clicked.connect(self._add_folder)
         self.remove_folder_button.clicked.connect(self._remove_selected_folders)
         self.scan_button.clicked.connect(self._start_scan)
         self.quarantine_button.clicked.connect(self._start_quarantine)
+        self.result_tree.itemChanged.connect(self._result_tree_item_changed)
+        self.result_tree.itemSelectionChanged.connect(self._preview_selected_item)
 
     def _load_config_paths(self) -> None:
         for path in self.config.scan.target_paths:
@@ -138,10 +166,28 @@ class MainWindow(QMainWindow):
         self._save_target_paths()
         self._set_busy(True, "スキャン中です。")
         self.results.clear()
+        self.result_tree.clear()
+        self._thumbnail_cache.clear()
+        self.preview_label.setText("画像を選択するとプレビューを表示します。")
+        self.preview_label.setPixmap(QPixmap())
         self.has_quarantine_candidates = False
 
-        def run_scan_and_detection():
-            scan_result = ScanService(self.database, self.config, self.logger).scan(target_paths)
+        def run_scan_and_detection(progress):
+            scan_result = ScanService(
+                self.database,
+                self.config,
+                self.logger,
+            ).scan(target_paths, progress_callback=progress)
+            progress(
+                {
+                    "phase": "detecting",
+                    "message": "検出中です。",
+                    "total_files": scan_result.total_files,
+                    "processed_files": scan_result.total_files,
+                    "cache_used_count": scan_result.cache_used_count,
+                    "error_count": scan_result.error_count,
+                }
+            )
             detection_result = DetectionService(
                 self.database,
                 self.logger,
@@ -153,6 +199,7 @@ class MainWindow(QMainWindow):
             return scan_result, detection_result, details
 
         worker = FunctionWorker(run_scan_and_detection)
+        worker.signals.progress.connect(self._scan_progress)
         worker.signals.succeeded.connect(self._scan_finished)
         worker.signals.failed.connect(self._worker_failed)
         worker.signals.finished.connect(lambda: self._set_busy(False))
@@ -204,14 +251,53 @@ class MainWindow(QMainWindow):
                     f"({size_label}, 更新={item.modified_at}{blur_label}{phash_label})"
                 )
         self.results.setPlainText("\n".join(lines))
-        candidate_count = (
-            detection_result.duplicate_item_count
-            + detection_result.similar_item_count
-            + detection_result.blurry_item_count
-        )
-        self.has_quarantine_candidates = candidate_count > 0
+        self._populate_result_tree(details)
+        self.has_quarantine_candidates = self._selected_tree_item_count() > 0
         self.quarantine_button.setEnabled(self.has_quarantine_candidates)
-        self.status_label.setText("スキャンと完全重複検出が完了しました。")
+        self.status_label.setText("スキャンと検出が完了しました。")
+
+    def _scan_progress(self, payload: object) -> None:
+        if isinstance(payload, dict):
+            phase = str(payload.get("phase", ""))
+            total_files = int(payload.get("total_files", 0))
+            processed_files = int(payload.get("processed_files", 0))
+            cache_used_count = int(payload.get("cache_used_count", 0))
+            error_count = int(payload.get("error_count", 0))
+            message = str(payload.get("message", "処理中です。"))
+            current_path = payload.get("current_path")
+        else:
+            phase = str(getattr(payload, "phase", ""))
+            total_files = int(getattr(payload, "total_files", 0))
+            processed_files = int(getattr(payload, "processed_files", 0))
+            cache_used_count = int(getattr(payload, "cache_used_count", 0))
+            error_count = int(getattr(payload, "error_count", 0))
+            current_path = getattr(payload, "current_path", None)
+            message = self._scan_phase_label(phase)
+
+        if total_files > 0:
+            self.progress.setRange(0, total_files)
+            self.progress.setValue(min(processed_files, total_files))
+        else:
+            self.progress.setRange(0, 0)
+
+        lines = [
+            message,
+            f"処理済み: {processed_files} / {total_files} 件",
+            f"キャッシュ利用: {cache_used_count} 件",
+            f"エラー: {error_count} 件",
+        ]
+        if current_path:
+            lines.append(f"現在: {current_path}")
+        self.status_label.setText("  ".join(lines))
+
+    def _scan_phase_label(self, phase: str) -> str:
+        if phase == "collecting":
+            return "対象ファイルを集めています。"
+        if phase == "scanning":
+            return "画像と映像を解析しています。"
+        if phase == "detecting":
+            return "重複・類似・ブレを検出しています。"
+        return "処理中です。"
 
     def _group_label(self, group_type: str) -> str:
         if group_type == "duplicate_image":
@@ -229,14 +315,161 @@ class MainWindow(QMainWindow):
             return f"{size_bytes / 1024:.1f} KB"
         return f"{size_bytes / 1024 / 1024:.1f} MB"
 
+    def _populate_result_tree(self, details: object) -> None:
+        self._populating_results_tree = True
+        self.result_tree.clear()
+        try:
+            for detail in details:
+                summary = detail.summary
+                label = self._group_label(summary.group_type)
+                parent = QTreeWidgetItem(
+                    [
+                        "",
+                        label,
+                        f"{summary.item_count} 件中 {summary.selected_count} 件を隔離候補",
+                        summary.reason,
+                    ]
+                )
+                parent.setFirstColumnSpanned(False)
+                self.result_tree.addTopLevelItem(parent)
+
+                for item in detail.items:
+                    selected_label = "隔離する" if item.selected_by_default else "残す"
+                    info = self._item_info_label(item)
+                    child = QTreeWidgetItem(
+                        [
+                            selected_label,
+                            item.media_type,
+                            item.path,
+                            info,
+                        ]
+                    )
+                    child.setFlags(
+                        child.flags()
+                        | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsEnabled
+                    )
+                    child.setCheckState(
+                        0,
+                        Qt.CheckState.Checked
+                        if item.selected_by_default
+                        else Qt.CheckState.Unchecked,
+                    )
+                    child.setData(0, Qt.ItemDataRole.UserRole, item.detection_group_item_id)
+                    child.setData(2, PATH_ROLE, item.path)
+                    child.setData(2, MEDIA_TYPE_ROLE, item.media_type)
+                    child.setIcon(2, self._thumbnail_icon(item.path, item.media_type))
+                    parent.addChild(child)
+                parent.setExpanded(True)
+
+            self.result_tree.resizeColumnToContents(0)
+            self.result_tree.resizeColumnToContents(1)
+        finally:
+            self._populating_results_tree = False
+
+    def _item_info_label(self, item: object) -> str:
+        parts = [self._format_size(item.size_bytes), f"更新={item.modified_at}"]
+        if item.blur_score is not None:
+            parts.append(f"blur={item.blur_score:.2f}")
+        if item.perceptual_hash is not None:
+            parts.append(f"pHash={item.perceptual_hash}")
+        return ", ".join(parts)
+
+    def _thumbnail_icon(self, path: str, media_type: str) -> QIcon:
+        if media_type != "image":
+            return QIcon()
+        cached = self._thumbnail_cache.get(path)
+        if cached is not None:
+            return cached
+
+        pixmap = QPixmap()
+        try:
+            pixmap.loadFromData(Path(path).read_bytes())
+        except OSError:
+            icon = QIcon()
+        else:
+            if pixmap.isNull():
+                icon = QIcon()
+            else:
+                thumbnail = pixmap.scaled(
+                    72,
+                    72,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                icon = QIcon(thumbnail)
+        self._thumbnail_cache[path] = icon
+        return icon
+
+    def _preview_selected_item(self) -> None:
+        items = self.result_tree.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        path = item.data(2, PATH_ROLE)
+        media_type = item.data(2, MEDIA_TYPE_ROLE)
+        if not path or media_type != "image":
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("画像ファイルを選択するとプレビューを表示します。")
+            return
+
+        pixmap = QPixmap()
+        try:
+            pixmap.loadFromData(Path(str(path)).read_bytes())
+        except OSError:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("プレビューを読み込めませんでした。")
+            return
+        if pixmap.isNull():
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("プレビューを読み込めませんでした。")
+            return
+
+        target_size = self.preview_label.size()
+        scaled = pixmap.scaled(
+            target_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.preview_label.setText("")
+        self.preview_label.setPixmap(scaled)
+
+    def _result_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        if self._populating_results_tree or column != 0:
+            return
+        group_item_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if group_item_id is None:
+            return
+        selected = item.checkState(0) == Qt.CheckState.Checked
+        item.setText(0, "隔離する" if selected else "残す")
+        ResultService(self.database).set_detection_item_selected(int(group_item_id), selected)
+        selected_count = self._selected_tree_item_count()
+        self.has_quarantine_candidates = selected_count > 0
+        self.quarantine_button.setEnabled(self.has_quarantine_candidates)
+        self.status_label.setText(f"隔離候補: {selected_count} 件")
+
+    def _selected_tree_item_count(self) -> int:
+        count = 0
+        for top_index in range(self.result_tree.topLevelItemCount()):
+            parent = self.result_tree.topLevelItem(top_index)
+            for child_index in range(parent.childCount()):
+                child = parent.child(child_index)
+                if child.checkState(0) == Qt.CheckState.Checked:
+                    count += 1
+        return count
+
     def _start_quarantine(self) -> None:
         if self.current_scan_session_id is None:
             QMessageBox.information(self, "結果なし", "先にスキャンを実行してください。")
             return
+        selected_count = self._selected_tree_item_count()
+        if selected_count == 0:
+            QMessageBox.information(self, "候補なし", "隔離するファイルにチェックを入れてください。")
+            return
         reply = QMessageBox.question(
             self,
             "隔離の確認",
-            "初期候補として選ばれた重複ファイルを隔離します。",
+            f"チェックした {selected_count} 件のファイルを隔離します。",
         )
         if reply != QMessageBox.StandardButton.Yes:
             return

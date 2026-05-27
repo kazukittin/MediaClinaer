@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from media_clinaer.analysis.blur_detector import calculate_blur_score
@@ -25,6 +26,16 @@ class ScanResult:
     error_count: int
 
 
+@dataclass(frozen=True)
+class ScanProgress:
+    phase: str
+    total_files: int
+    processed_files: int
+    cache_used_count: int
+    error_count: int
+    current_path: str | None = None
+
+
 class ScanService:
     def __init__(
         self,
@@ -36,7 +47,11 @@ class ScanService:
         self.config = config
         self.logger = logger
 
-    def scan(self, target_paths: list[str] | None = None) -> ScanResult:
+    def scan(
+        self,
+        target_paths: list[str] | None = None,
+        progress_callback: Callable[[ScanProgress], None] | None = None,
+    ) -> ScanResult:
         targets = target_paths if target_paths is not None else self.config.scan.target_paths
         connection = self.database.connect()
         try:
@@ -53,13 +68,35 @@ class ScanService:
                 details={"session_id": session.id, "targets": targets},
             )
 
-            total_files = 0
+            self._emit_progress(
+                progress_callback,
+                ScanProgress(
+                    phase="collecting",
+                    total_files=0,
+                    processed_files=0,
+                    cache_used_count=0,
+                    error_count=0,
+                ),
+            )
+
+            paths = list(collector.collect(targets))
+            total_files = len(paths)
             scanned_files = 0
             cache_used_count = 0
             error_count = 0
 
-            for path in collector.collect(targets):
-                total_files += 1
+            self._emit_progress(
+                progress_callback,
+                ScanProgress(
+                    phase="scanning",
+                    total_files=total_files,
+                    processed_files=0,
+                    cache_used_count=0,
+                    error_count=0,
+                ),
+            )
+
+            for path in paths:
                 try:
                     metadata = metadata_reader.read(path)
                     record = cache_service.build_from_cache(metadata)
@@ -101,6 +138,18 @@ class ScanService:
                         f"Unexpected scan error: {exc}",
                         path=str(path),
                     )
+                finally:
+                    self._emit_progress(
+                        progress_callback,
+                        ScanProgress(
+                            phase="scanning",
+                            total_files=total_files,
+                            processed_files=scanned_files + error_count,
+                            cache_used_count=cache_used_count,
+                            error_count=error_count,
+                            current_path=str(path),
+                        ),
+                    )
 
             scan_repository.finish_session(
                 session.id,
@@ -130,3 +179,11 @@ class ScanService:
             )
         finally:
             connection.close()
+
+    def _emit_progress(
+        self,
+        progress_callback: Callable[[ScanProgress], None] | None,
+        progress: ScanProgress,
+    ) -> None:
+        if progress_callback is not None:
+            progress_callback(progress)
