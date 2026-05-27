@@ -14,6 +14,8 @@ class CacheService:
             return None
         if metadata.media_type == "image" and row["perceptual_hash"] is None:
             return None
+        if metadata.media_type == "image" and row["blur_score"] is None:
+            return None
         return MediaFileRecord(
             metadata=metadata,
             sha256=row["sha256"],

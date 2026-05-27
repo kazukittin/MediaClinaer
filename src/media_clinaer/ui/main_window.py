@@ -174,12 +174,15 @@ class MainWindow(QMainWindow):
             f"重複候補ファイル: {detection_result.duplicate_item_count} 件",
             f"類似画像グループ: {detection_result.similar_group_count} 件",
             f"類似画像候補ファイル: {detection_result.similar_item_count} 件",
+            f"ブレ画像候補: {detection_result.blurry_item_count} 件",
         ]
         for summary in summaries:
             if summary.group_type == "duplicate_image":
                 label = "重複画像"
             elif summary.group_type == "duplicate_video":
                 label = "重複映像"
+            elif summary.group_type == "blurry_image":
+                label = "ブレ画像"
             else:
                 label = "類似画像"
             lines.append(
@@ -187,7 +190,9 @@ class MainWindow(QMainWindow):
             )
         self.results.setPlainText("\n".join(lines))
         candidate_count = (
-            detection_result.duplicate_item_count + detection_result.similar_item_count
+            detection_result.duplicate_item_count
+            + detection_result.similar_item_count
+            + detection_result.blurry_item_count
         )
         self.has_quarantine_candidates = candidate_count > 0
         self.quarantine_button.setEnabled(self.has_quarantine_candidates)

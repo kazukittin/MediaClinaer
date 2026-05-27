@@ -96,3 +96,49 @@ def test_detection_service_saves_similar_image_groups(tmp_path):
 
     assert result.similar_group_count == 1
     assert result.similar_item_count == 2
+
+
+def test_detection_service_saves_blurry_image_groups(tmp_path):
+    database = Database(tmp_path / "cache" / "media_clinaer.sqlite3")
+    database.initialize()
+    logger = JsonLineLogger(tmp_path / "logs" / "app.log")
+    connection = sqlite3.connect(database.database_path)
+    try:
+        now = datetime.now().isoformat(timespec="seconds")
+        scan_session_id = connection.execute(
+            """
+            INSERT INTO scan_sessions (started_at, status, target_paths_json)
+            VALUES (?, 'completed', '[]')
+            """,
+            (now,),
+        ).lastrowid
+        connection.execute(
+            """
+            INSERT INTO media_files (
+                scan_session_id,
+                path,
+                normalized_path,
+                storage_type,
+                media_type,
+                extension,
+                size_bytes,
+                modified_at,
+                sha256,
+                perceptual_hash,
+                blur_score,
+                cache_status,
+                created_at
+            )
+            VALUES (?, 'blurry.jpg', 'blurry.jpg', 'local', 'image', '.jpg', 10,
+                    ?, 'sha-blurry', '0000000000000000', 20.0, 'fresh', ?)
+            """,
+            (scan_session_id, now, now),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = DetectionService(database, logger).detect_duplicates(int(scan_session_id))
+
+    assert result.blurry_group_count == 1
+    assert result.blurry_item_count == 1

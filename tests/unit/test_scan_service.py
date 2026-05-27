@@ -34,8 +34,10 @@ def test_scan_service_saves_media_and_reuses_cache(tmp_path):
         perceptual_hash = connection.execute(
             "SELECT perceptual_hash FROM analysis_cache"
         ).fetchone()[0]
+        blur_score = connection.execute("SELECT blur_score FROM analysis_cache").fetchone()[0]
     finally:
         connection.close()
     assert media_count == 2
     assert cache_count == 1
     assert perceptual_hash is not None
+    assert blur_score is not None

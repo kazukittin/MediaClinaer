@@ -11,6 +11,7 @@ class DetectionCandidate:
     sha256: str
     size_bytes: int
     perceptual_hash: str | None = None
+    blur_score: float | None = None
 
 
 @dataclass(frozen=True)

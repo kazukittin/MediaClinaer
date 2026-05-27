@@ -216,7 +216,7 @@ class DetectionRepository:
         self.connection.row_factory = sqlite3.Row
         rows = self.connection.execute(
             """
-            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash
+            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash, blur_score
             FROM media_files
             WHERE scan_session_id = ?
               AND sha256 IS NOT NULL
@@ -236,6 +236,9 @@ class DetectionRepository:
                     if row["perceptual_hash"] is not None
                     else None
                 ),
+                blur_score=(
+                    float(row["blur_score"]) if row["blur_score"] is not None else None
+                ),
             )
             for row in rows
         ]
@@ -244,7 +247,7 @@ class DetectionRepository:
         self.connection.row_factory = sqlite3.Row
         rows = self.connection.execute(
             """
-            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash
+            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash, blur_score
             FROM media_files
             WHERE scan_session_id = ?
               AND media_type = 'image'
@@ -262,6 +265,40 @@ class DetectionRepository:
                 sha256=str(row["sha256"]),
                 size_bytes=int(row["size_bytes"]),
                 perceptual_hash=str(row["perceptual_hash"]),
+                blur_score=(
+                    float(row["blur_score"]) if row["blur_score"] is not None else None
+                ),
+            )
+            for row in rows
+        ]
+
+    def list_blur_candidates(self, scan_session_id: int) -> list[DetectionCandidate]:
+        self.connection.row_factory = sqlite3.Row
+        rows = self.connection.execute(
+            """
+            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash, blur_score
+            FROM media_files
+            WHERE scan_session_id = ?
+              AND media_type = 'image'
+              AND sha256 IS NOT NULL
+              AND blur_score IS NOT NULL
+              AND scan_error IS NULL
+            """,
+            (scan_session_id,),
+        ).fetchall()
+        return [
+            DetectionCandidate(
+                media_file_id=int(row["id"]),
+                path=str(row["path"]),
+                media_type=str(row["media_type"]),
+                sha256=str(row["sha256"]),
+                size_bytes=int(row["size_bytes"]),
+                perceptual_hash=(
+                    str(row["perceptual_hash"])
+                    if row["perceptual_hash"] is not None
+                    else None
+                ),
+                blur_score=float(row["blur_score"]),
             )
             for row in rows
         ]

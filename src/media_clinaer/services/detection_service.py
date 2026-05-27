@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from media_clinaer.config.models import AppConfig
+from media_clinaer.detection.blurry_detector import BlurryDetector
 from media_clinaer.detection.duplicate_detector import DuplicateDetector
 from media_clinaer.detection.similar_detector import SimilarDetector
 from media_clinaer.logging.events import EventType
@@ -18,6 +19,8 @@ class DetectionResult:
     duplicate_item_count: int
     similar_group_count: int = 0
     similar_item_count: int = 0
+    blurry_group_count: int = 0
+    blurry_item_count: int = 0
 
 
 class DetectionService:
@@ -44,6 +47,13 @@ class DetectionService:
                     self.config.detection.similar_image_hash_distance
                 ).detect(similar_candidates)
                 groups.extend(similar_groups)
+            blurry_groups = []
+            if self.config.detection.enable_blurry_images:
+                blur_candidates = repository.list_blur_candidates(scan_session_id)
+                blurry_groups = BlurryDetector(
+                    self.config.detection.blur_threshold
+                ).detect(blur_candidates)
+                groups.extend(blurry_groups)
             repository.replace_detection_groups(scan_session_id, groups)
 
             duplicate_groups = [
@@ -53,6 +63,7 @@ class DetectionService:
             ]
             duplicate_item_count = sum(len(group.items) for group in duplicate_groups)
             similar_item_count = sum(len(group.items) for group in similar_groups)
+            blurry_item_count = sum(len(group.items) for group in blurry_groups)
             for group in duplicate_groups:
                 self.logger.info(
                     EventType.DUPLICATE_DETECTED,
@@ -72,12 +83,23 @@ class DetectionService:
                         "item_count": len(group.items),
                     },
                 )
+            for group in blurry_groups:
+                self.logger.info(
+                    EventType.BLURRY_DETECTED,
+                    "Blurry image detected",
+                    details={
+                        "scan_session_id": scan_session_id,
+                        "item_count": len(group.items),
+                    },
+                )
             return DetectionResult(
                 scan_session_id=scan_session_id,
                 duplicate_group_count=len(duplicate_groups),
                 duplicate_item_count=duplicate_item_count,
                 similar_group_count=len(similar_groups),
                 similar_item_count=similar_item_count,
+                blurry_group_count=len(blurry_groups),
+                blurry_item_count=blurry_item_count,
             )
         finally:
             connection.close()
