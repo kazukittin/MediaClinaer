@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from media_clinaer.analysis.hashing import calculate_sha256
+from media_clinaer.analysis.image_similarity import calculate_perceptual_hash
 from media_clinaer.config.models import AppConfig
 from media_clinaer.logging.events import EventType
 from media_clinaer.logging.logger import JsonLineLogger
@@ -70,10 +71,13 @@ class ScanService:
                         )
                     else:
                         sha256 = calculate_sha256(path)
+                        perceptual_hash = None
+                        if metadata.media_type == "image":
+                            perceptual_hash = calculate_perceptual_hash(path)
                         record = MediaFileRecord(
                             metadata=metadata,
                             sha256=sha256,
-                            perceptual_hash=None,
+                            perceptual_hash=perceptual_hash,
                             blur_score=None,
                             cache_status="fresh",
                         )

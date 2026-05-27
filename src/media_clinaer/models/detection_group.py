@@ -10,6 +10,7 @@ class DetectionCandidate:
     media_type: str
     sha256: str
     size_bytes: int
+    perceptual_hash: str | None = None
 
 
 @dataclass(frozen=True)

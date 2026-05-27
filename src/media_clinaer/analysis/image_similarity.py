@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 
-def calculate_perceptual_hash_placeholder() -> None:
-    raise NotImplementedError("Similar image analysis is implemented in a later phase.")
+import imagehash
+from PIL import Image
+
+
+def calculate_perceptual_hash(path: Path) -> str:
+    with Image.open(path) as image:
+        return str(imagehash.phash(image))
+
+
+def hash_distance(left: str, right: str) -> int:
+    return int(imagehash.hex_to_hash(left) - imagehash.hex_to_hash(right))

@@ -142,9 +142,11 @@ class MainWindow(QMainWindow):
 
         def run_scan_and_detection():
             scan_result = ScanService(self.database, self.config, self.logger).scan(target_paths)
-            detection_result = DetectionService(self.database, self.logger).detect_duplicates(
-                scan_result.session_id
-            )
+            detection_result = DetectionService(
+                self.database,
+                self.logger,
+                self.config,
+            ).detect_duplicates(scan_result.session_id)
             summaries = ResultService(self.database).list_detection_group_summaries(
                 scan_result.session_id
             )
@@ -170,14 +172,24 @@ class MainWindow(QMainWindow):
             "",
             f"完全重複グループ: {detection_result.duplicate_group_count} 件",
             f"重複候補ファイル: {detection_result.duplicate_item_count} 件",
+            f"類似画像グループ: {detection_result.similar_group_count} 件",
+            f"類似画像候補ファイル: {detection_result.similar_item_count} 件",
         ]
         for summary in summaries:
-            label = "画像" if summary.group_type == "duplicate_image" else "映像"
+            if summary.group_type == "duplicate_image":
+                label = "重複画像"
+            elif summary.group_type == "duplicate_video":
+                label = "重複映像"
+            else:
+                label = "類似画像"
             lines.append(
                 f"- {label}: {summary.item_count} 件中 {summary.selected_count} 件を隔離候補"
             )
         self.results.setPlainText("\n".join(lines))
-        self.has_quarantine_candidates = detection_result.duplicate_item_count > 0
+        candidate_count = (
+            detection_result.duplicate_item_count + detection_result.similar_item_count
+        )
+        self.has_quarantine_candidates = candidate_count > 0
         self.quarantine_button.setEnabled(self.has_quarantine_candidates)
         self.status_label.setText("スキャンと完全重複検出が完了しました。")
 

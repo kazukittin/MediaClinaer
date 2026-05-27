@@ -216,7 +216,7 @@ class DetectionRepository:
         self.connection.row_factory = sqlite3.Row
         rows = self.connection.execute(
             """
-            SELECT id, path, media_type, sha256, size_bytes
+            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash
             FROM media_files
             WHERE scan_session_id = ?
               AND sha256 IS NOT NULL
@@ -231,6 +231,37 @@ class DetectionRepository:
                 media_type=str(row["media_type"]),
                 sha256=str(row["sha256"]),
                 size_bytes=int(row["size_bytes"]),
+                perceptual_hash=(
+                    str(row["perceptual_hash"])
+                    if row["perceptual_hash"] is not None
+                    else None
+                ),
+            )
+            for row in rows
+        ]
+
+    def list_similarity_candidates(self, scan_session_id: int) -> list[DetectionCandidate]:
+        self.connection.row_factory = sqlite3.Row
+        rows = self.connection.execute(
+            """
+            SELECT id, path, media_type, sha256, size_bytes, perceptual_hash
+            FROM media_files
+            WHERE scan_session_id = ?
+              AND media_type = 'image'
+              AND sha256 IS NOT NULL
+              AND perceptual_hash IS NOT NULL
+              AND scan_error IS NULL
+            """,
+            (scan_session_id,),
+        ).fetchall()
+        return [
+            DetectionCandidate(
+                media_file_id=int(row["id"]),
+                path=str(row["path"]),
+                media_type=str(row["media_type"]),
+                sha256=str(row["sha256"]),
+                size_bytes=int(row["size_bytes"]),
+                perceptual_hash=str(row["perceptual_hash"]),
             )
             for row in rows
         ]

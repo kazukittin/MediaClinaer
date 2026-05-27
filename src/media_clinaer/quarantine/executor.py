@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import stat
 from pathlib import Path
 
 from media_clinaer.models.quarantine_record import QuarantineOutcome, QuarantinePlan
@@ -22,11 +23,18 @@ class QuarantineExecutor:
             return QuarantineOutcome(plan, "copy_failed", "Copied file size mismatch")
 
         try:
-            source.unlink()
+            self._delete_source(source)
         except OSError as exc:
             return QuarantineOutcome(plan, "delete_failed", str(exc))
 
         return QuarantineOutcome(plan, "completed")
+
+    def _delete_source(self, source: Path) -> None:
+        try:
+            source.unlink()
+        except PermissionError:
+            source.chmod(source.stat().st_mode | stat.S_IWRITE)
+            source.unlink()
 
     def _verify_size(self, source: Path, destination: Path) -> bool:
         try:
