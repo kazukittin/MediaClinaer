@@ -62,7 +62,13 @@ class ScanRepository:
         )
         self.connection.commit()
 
-    def insert_media_file(self, session_id: int, record: MediaFileRecord) -> int:
+    def insert_media_file(
+        self,
+        session_id: int,
+        record: MediaFileRecord,
+        *,
+        commit: bool = True,
+    ) -> int:
         metadata = record.metadata
         cursor = self.connection.execute(
             """
@@ -101,7 +107,8 @@ class ScanRepository:
                 self._now(),
             ),
         )
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
         return int(cursor.lastrowid)
 
     def _now(self) -> str:
@@ -128,7 +135,12 @@ class AnalysisCacheRepository:
         )
         return cursor.fetchone()
 
-    def upsert_success(self, record: MediaFileRecord) -> None:
+    def upsert_success(
+        self,
+        record: MediaFileRecord,
+        *,
+        commit: bool = True,
+    ) -> None:
         metadata = record.metadata
         self.connection.execute(
             """
@@ -168,9 +180,16 @@ class AnalysisCacheRepository:
                 self._now(),
             ),
         )
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
 
-    def upsert_error(self, metadata: MediaMetadata, error: str) -> None:
+    def upsert_error(
+        self,
+        metadata: MediaMetadata,
+        error: str,
+        *,
+        commit: bool = True,
+    ) -> None:
         self.connection.execute(
             """
             INSERT INTO analysis_cache (
@@ -201,7 +220,8 @@ class AnalysisCacheRepository:
                 error,
             ),
         )
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
 
     def _now(self) -> str:
         return datetime.now(self.timezone).isoformat(timespec="seconds")

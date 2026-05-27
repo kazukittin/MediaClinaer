@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -67,26 +68,19 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(root)
         layout.setSpacing(10)
 
-        title = QLabel("MediaClinaer")
-        title.setObjectName("TitleLabel")
-        layout.addWidget(title)
-
         self.folder_list = QListWidget()
-        self.folder_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.folder_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.folder_list.setMaximumHeight(34)
         layout.addWidget(self.folder_list)
 
-        folder_buttons = QHBoxLayout()
+        action_buttons = QHBoxLayout()
         self.add_folder_button = QPushButton("フォルダ追加")
         self.remove_folder_button = QPushButton("選択解除")
-        folder_buttons.addWidget(self.add_folder_button)
-        folder_buttons.addWidget(self.remove_folder_button)
-        folder_buttons.addStretch(1)
-        layout.addLayout(folder_buttons)
-
-        action_buttons = QHBoxLayout()
         self.scan_button = QPushButton("スキャン")
         self.quarantine_button = QPushButton("候補を隔離")
         self.quarantine_button.setEnabled(False)
+        action_buttons.addWidget(self.add_folder_button)
+        action_buttons.addWidget(self.remove_folder_button)
         action_buttons.addWidget(self.scan_button)
         action_buttons.addWidget(self.quarantine_button)
         action_buttons.addStretch(1)
@@ -100,13 +94,19 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("フォルダを追加してスキャンを開始できます。")
         layout.addWidget(self.status_label)
 
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, stretch=1)
+
         self.results = QPlainTextEdit()
         self.results.setReadOnly(True)
-        self.results.setPlaceholderText("検出結果がここに表示されます。")
-        layout.addWidget(self.results, stretch=1)
+        self.results.setPlaceholderText("ログがここに表示されます。")
+        self.tabs.addTab(self.results, "ログ")
 
+        candidates_tab = QWidget()
+        candidates_layout = QVBoxLayout(candidates_tab)
+        candidates_layout.setSpacing(8)
         selection_label = QLabel("隔離候補の選択")
-        layout.addWidget(selection_label)
+        candidates_layout.addWidget(selection_label)
 
         self.result_tree = QTreeWidget()
         self.result_tree.setColumnCount(4)
@@ -114,13 +114,14 @@ class MainWindow(QMainWindow):
         self.result_tree.setRootIsDecorated(True)
         self.result_tree.setAlternatingRowColors(True)
         self.result_tree.setIconSize(QSize(72, 72))
-        layout.addWidget(self.result_tree, stretch=2)
+        candidates_layout.addWidget(self.result_tree, stretch=2)
 
         self.preview_label = QLabel("画像を選択するとプレビューを表示します。")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumHeight(220)
         self.preview_label.setStyleSheet("border: 1px solid #cccccc; background: #fafafa;")
-        layout.addWidget(self.preview_label, stretch=1)
+        candidates_layout.addWidget(self.preview_label, stretch=1)
+        self.tabs.addTab(candidates_tab, "隔離候補")
 
         self.setCentralWidget(root)
 
@@ -138,12 +139,8 @@ class MainWindow(QMainWindow):
     def _add_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "スキャンするフォルダを選択")
         if folder:
-            existing = {
-                self.folder_list.item(index).text()
-                for index in range(self.folder_list.count())
-            }
-            if folder not in existing:
-                self.folder_list.addItem(folder)
+            self.folder_list.clear()
+            self.folder_list.addItem(folder)
             self._save_target_paths()
 
     def _remove_selected_folders(self) -> None:
@@ -254,6 +251,7 @@ class MainWindow(QMainWindow):
         self._populate_result_tree(details)
         self.has_quarantine_candidates = self._selected_tree_item_count() > 0
         self.quarantine_button.setEnabled(self.has_quarantine_candidates)
+        self.tabs.setCurrentIndex(1)
         self.status_label.setText("スキャンと検出が完了しました。")
 
     def _scan_progress(self, payload: object) -> None:
@@ -319,53 +317,74 @@ class MainWindow(QMainWindow):
         self._populating_results_tree = True
         self.result_tree.clear()
         try:
-            for detail in details:
-                summary = detail.summary
-                label = self._group_label(summary.group_type)
-                parent = QTreeWidgetItem(
-                    [
-                        "",
-                        label,
-                        f"{summary.item_count} 件中 {summary.selected_count} 件を隔離候補",
-                        summary.reason,
-                    ]
-                )
-                parent.setFirstColumnSpanned(False)
-                self.result_tree.addTopLevelItem(parent)
+            duplicate_root = QTreeWidgetItem(["", "重複・類似画像", "", ""])
+            blur_root = QTreeWidgetItem(["", "ブレ画像", "", ""])
+            self.result_tree.addTopLevelItem(duplicate_root)
+            self.result_tree.addTopLevelItem(blur_root)
 
-                for item in detail.items:
-                    selected_label = "隔離する" if item.selected_by_default else "残す"
-                    info = self._item_info_label(item)
-                    child = QTreeWidgetItem(
-                        [
-                            selected_label,
-                            item.media_type,
-                            item.path,
-                            info,
-                        ]
-                    )
-                    child.setFlags(
-                        child.flags()
-                        | Qt.ItemFlag.ItemIsUserCheckable
-                        | Qt.ItemFlag.ItemIsEnabled
-                    )
-                    child.setCheckState(
-                        0,
-                        Qt.CheckState.Checked
-                        if item.selected_by_default
-                        else Qt.CheckState.Unchecked,
-                    )
-                    child.setData(0, Qt.ItemDataRole.UserRole, item.detection_group_item_id)
-                    child.setData(2, PATH_ROLE, item.path)
-                    child.setData(2, MEDIA_TYPE_ROLE, item.media_type)
-                    child.setIcon(2, self._thumbnail_icon(item.path, item.media_type))
-                    parent.addChild(child)
-                parent.setExpanded(True)
+            for detail in details:
+                category = (
+                    blur_root
+                    if detail.summary.group_type == "blurry_image"
+                    else duplicate_root
+                )
+                self._add_detection_group_item(category, detail)
+
+            for root_item in (duplicate_root, blur_root):
+                if root_item.childCount() == 0:
+                    root_item.addChild(QTreeWidgetItem(["", "", "候補なし", ""]))
+                root_item.setExpanded(True)
 
             self.result_tree.resizeColumnToContents(0)
             self.result_tree.resizeColumnToContents(1)
         finally:
             self._populating_results_tree = False
+
+    def _add_detection_group_item(
+        self,
+        category: QTreeWidgetItem,
+        detail: object,
+    ) -> None:
+        summary = detail.summary
+        label = self._group_label(summary.group_type)
+        group_item = QTreeWidgetItem(
+            [
+                "",
+                label,
+                f"{summary.item_count} 件中 {summary.selected_count} 件を隔離候補",
+                summary.reason,
+            ]
+        )
+        category.addChild(group_item)
+
+        for item in detail.items:
+            selected_label = "隔離する" if item.selected_by_default else "残す"
+            info = self._item_info_label(item)
+            child = QTreeWidgetItem(
+                [
+                    selected_label,
+                    item.media_type,
+                    item.path,
+                    info,
+                ]
+            )
+            child.setFlags(
+                child.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsEnabled
+            )
+            child.setCheckState(
+                0,
+                Qt.CheckState.Checked
+                if item.selected_by_default
+                else Qt.CheckState.Unchecked,
+            )
+            child.setData(0, Qt.ItemDataRole.UserRole, item.detection_group_item_id)
+            child.setData(2, PATH_ROLE, item.path)
+            child.setData(2, MEDIA_TYPE_ROLE, item.media_type)
+            child.setIcon(2, self._thumbnail_icon(item.path, item.media_type))
+            group_item.addChild(child)
+        group_item.setExpanded(True)
 
     def _item_info_label(self, item: object) -> str:
         parts = [self._format_size(item.size_bytes), f"更新={item.modified_at}"]
@@ -451,11 +470,17 @@ class MainWindow(QMainWindow):
     def _selected_tree_item_count(self) -> int:
         count = 0
         for top_index in range(self.result_tree.topLevelItemCount()):
-            parent = self.result_tree.topLevelItem(top_index)
-            for child_index in range(parent.childCount()):
-                child = parent.child(child_index)
-                if child.checkState(0) == Qt.CheckState.Checked:
-                    count += 1
+            count += self._selected_tree_item_count_recursive(
+                self.result_tree.topLevelItem(top_index)
+            )
+        return count
+
+    def _selected_tree_item_count_recursive(self, item: QTreeWidgetItem) -> int:
+        count = 0
+        if item.data(0, Qt.ItemDataRole.UserRole) is not None:
+            count += int(item.checkState(0) == Qt.CheckState.Checked)
+        for child_index in range(item.childCount()):
+            count += self._selected_tree_item_count_recursive(item.child(child_index))
         return count
 
     def _start_quarantine(self) -> None:

@@ -4,12 +4,62 @@ from media_clinaer.analysis.image_similarity import hash_distance
 from media_clinaer.models.detection_group import DetectionCandidate, DetectionGroup
 
 
+class _BKNode:
+    def __init__(self, hash_value: str, candidate: DetectionCandidate) -> None:
+        self.hash_value = hash_value
+        self.candidates = [candidate]
+        self.children: dict[int, _BKNode] = {}
+
+
+class _BKTree:
+    def __init__(self) -> None:
+        self.root: _BKNode | None = None
+
+    def add(self, candidate: DetectionCandidate) -> None:
+        if candidate.perceptual_hash is None:
+            return
+        if self.root is None:
+            self.root = _BKNode(candidate.perceptual_hash, candidate)
+            return
+
+        node = self.root
+        while True:
+            distance = hash_distance(candidate.perceptual_hash, node.hash_value)
+            if distance == 0:
+                node.candidates.append(candidate)
+                return
+            child = node.children.get(distance)
+            if child is None:
+                node.children[distance] = _BKNode(candidate.perceptual_hash, candidate)
+                return
+            node = child
+
+    def query(self, hash_value: str, max_distance: int) -> list[DetectionCandidate]:
+        if self.root is None:
+            return []
+        matches: list[DetectionCandidate] = []
+        stack = [self.root]
+        while stack:
+            node = stack.pop()
+            distance = hash_distance(hash_value, node.hash_value)
+            if distance <= max_distance:
+                matches.extend(node.candidates)
+
+            lower = distance - max_distance
+            upper = distance + max_distance
+            for child_distance, child in node.children.items():
+                if lower <= child_distance <= upper:
+                    stack.append(child)
+        return matches
+
+
 class SimilarDetector:
     def __init__(self, max_distance: int) -> None:
         self.max_distance = max_distance
 
     def detect(self, candidates: list[DetectionCandidate]) -> list[DetectionGroup]:
         parent = {candidate.media_file_id: candidate.media_file_id for candidate in candidates}
+        tree = _BKTree()
 
         def find(item_id: int) -> int:
             while parent[item_id] != item_id:
@@ -23,17 +73,14 @@ class SimilarDetector:
             if left_root != right_root:
                 parent[right_root] = left_root
 
-        for left_index, left in enumerate(candidates):
-            if left.perceptual_hash is None:
+        for candidate in candidates:
+            if candidate.perceptual_hash is None:
                 continue
-            for right in candidates[left_index + 1 :]:
-                if right.perceptual_hash is None:
+            for match in tree.query(candidate.perceptual_hash, self.max_distance):
+                if candidate.sha256 == match.sha256:
                     continue
-                if left.sha256 == right.sha256:
-                    continue
-                distance = hash_distance(left.perceptual_hash, right.perceptual_hash)
-                if distance <= self.max_distance:
-                    union(left.media_file_id, right.media_file_id)
+                union(candidate.media_file_id, match.media_file_id)
+            tree.add(candidate)
 
         grouped: dict[int, list[DetectionCandidate]] = {}
         for candidate in candidates:

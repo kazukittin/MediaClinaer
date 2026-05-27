@@ -17,6 +17,10 @@ from media_clinaer.storage.database import Database
 from media_clinaer.storage.repositories import AnalysisCacheRepository, ScanRepository
 
 
+SCAN_COMMIT_BATCH_SIZE = 200
+PROGRESS_UPDATE_INTERVAL = 100
+
+
 @dataclass(frozen=True)
 class ScanResult:
     session_id: int
@@ -96,6 +100,7 @@ class ScanService:
                 ),
             )
 
+            pending_writes = 0
             for path in paths:
                 try:
                     metadata = metadata_reader.read(path)
@@ -121,8 +126,13 @@ class ScanService:
                             blur_score=blur_score,
                             cache_status="fresh",
                         )
-                        cache_service.save_success(record)
-                    scan_repository.insert_media_file(session.id, record)
+                        cache_service.save_success(record, commit=False)
+                        pending_writes += 1
+                    scan_repository.insert_media_file(session.id, record, commit=False)
+                    pending_writes += 1
+                    if pending_writes >= SCAN_COMMIT_BATCH_SIZE:
+                        connection.commit()
+                        pending_writes = 0
                     scanned_files += 1
                 except OSError as exc:
                     error_count += 1
@@ -139,18 +149,25 @@ class ScanService:
                         path=str(path),
                     )
                 finally:
-                    self._emit_progress(
-                        progress_callback,
-                        ScanProgress(
-                            phase="scanning",
-                            total_files=total_files,
-                            processed_files=scanned_files + error_count,
-                            cache_used_count=cache_used_count,
-                            error_count=error_count,
-                            current_path=str(path),
-                        ),
-                    )
+                    processed_files = scanned_files + error_count
+                    if (
+                        processed_files == total_files
+                        or processed_files % PROGRESS_UPDATE_INTERVAL == 0
+                    ):
+                        self._emit_progress(
+                            progress_callback,
+                            ScanProgress(
+                                phase="scanning",
+                                total_files=total_files,
+                                processed_files=processed_files,
+                                cache_used_count=cache_used_count,
+                                error_count=error_count,
+                                current_path=str(path),
+                            ),
+                        )
 
+            if pending_writes:
+                connection.commit()
             scan_repository.finish_session(
                 session.id,
                 status="completed",

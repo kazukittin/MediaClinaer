@@ -24,8 +24,14 @@ class CacheService:
             cache_status="reused",
         )
 
-    def save_success(self, record: MediaFileRecord) -> None:
-        self.repository.upsert_success(record)
+    def save_success(self, record: MediaFileRecord, *, commit: bool = True) -> None:
+        self.repository.upsert_success(record, commit=commit)
 
-    def save_error(self, metadata: MediaMetadata, error: str) -> None:
-        self.repository.upsert_error(metadata, error)
+    def save_error(
+        self,
+        metadata: MediaMetadata,
+        error: str,
+        *,
+        commit: bool = True,
+    ) -> None:
+        self.repository.upsert_error(metadata, error, commit=commit)
