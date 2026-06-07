@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from media_clinaer.app_context import AppContext
+from media_clinaer.analysis.image_similarity import hash_distance
 from media_clinaer.config.manager import ConfigManager
 from media_clinaer.config.models import AppConfig
 from media_clinaer.logging.logger import JsonLineLogger
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
         self.database = database
         self.logger = logger
         self.thread_pool = QThreadPool.globalInstance()
+        self.active_workers: list[FunctionWorker] = []
         self.current_scan_session_id: int | None = config.ui.last_opened_result_session_id
         self.has_quarantine_candidates = False
         self._populating_results_tree = False
@@ -109,13 +111,15 @@ class MainWindow(QMainWindow):
         selection_label = QLabel("隔離候補の選択")
         candidates_layout.addWidget(selection_label)
 
-        self.result_tree = QTreeWidget()
-        self.result_tree.setColumnCount(4)
-        self.result_tree.setHeaderLabels(["選択", "種類", "ファイル", "情報"])
-        self.result_tree.setRootIsDecorated(True)
-        self.result_tree.setAlternatingRowColors(True)
-        self.result_tree.setIconSize(QSize(72, 72))
-        candidates_layout.addWidget(self.result_tree, stretch=2)
+        self.candidate_tabs = QTabWidget()
+        self.duplicate_tree = self._create_result_tree()
+        self.similar_tree = self._create_result_tree()
+        self.blur_tree = self._create_result_tree()
+        self.result_trees = [self.duplicate_tree, self.similar_tree, self.blur_tree]
+        self.candidate_tabs.addTab(self.duplicate_tree, "重複画像")
+        self.candidate_tabs.addTab(self.similar_tree, "類似画像")
+        self.candidate_tabs.addTab(self.blur_tree, "ブレ画像")
+        candidates_layout.addWidget(self.candidate_tabs, stretch=2)
 
         self.preview_label = QLabel("画像を選択するとプレビューを表示します。")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -130,8 +134,18 @@ class MainWindow(QMainWindow):
         self.remove_folder_button.clicked.connect(self._remove_selected_folders)
         self.scan_button.clicked.connect(self._start_scan)
         self.quarantine_button.clicked.connect(self._start_quarantine)
-        self.result_tree.itemChanged.connect(self._result_tree_item_changed)
-        self.result_tree.itemSelectionChanged.connect(self._preview_selected_item)
+        for tree in self.result_trees:
+            tree.itemChanged.connect(self._result_tree_item_changed)
+            tree.itemSelectionChanged.connect(self._preview_selected_item)
+
+    def _create_result_tree(self) -> QTreeWidget:
+        tree = QTreeWidget()
+        tree.setColumnCount(4)
+        tree.setHeaderLabels(["選択", "種類", "ファイル", "情報"])
+        tree.setRootIsDecorated(True)
+        tree.setAlternatingRowColors(True)
+        tree.setIconSize(QSize(72, 72))
+        return tree
 
     def _load_config_paths(self) -> None:
         for path in self.config.scan.target_paths:
@@ -164,7 +178,7 @@ class MainWindow(QMainWindow):
         self._save_target_paths()
         self._set_busy(True, "スキャン中です。")
         self.results.clear()
-        self.result_tree.clear()
+        self._clear_result_trees()
         self._thumbnail_cache.clear()
         self.preview_label.setText("画像を選択するとプレビューを表示します。")
         self.preview_label.setPixmap(QPixmap())
@@ -211,8 +225,8 @@ class MainWindow(QMainWindow):
         worker.signals.progress.connect(self._scan_progress)
         worker.signals.succeeded.connect(self._scan_finished)
         worker.signals.failed.connect(self._worker_failed)
-        worker.signals.finished.connect(lambda: self._set_busy(False))
-        self.thread_pool.start(worker)
+        worker.signals.finished.connect(lambda: self._worker_finished(worker))
+        self._start_worker(worker)
 
     def _scan_finished(self, payload: object) -> None:
         scan_result, detection_result, details = payload
@@ -339,30 +353,52 @@ class MainWindow(QMainWindow):
 
     def _populate_result_tree(self, details: object) -> None:
         self._populating_results_tree = True
-        self.result_tree.clear()
+        self._clear_result_trees()
         try:
-            duplicate_root = QTreeWidgetItem(["", "重複・類似画像", "", ""])
-            blur_root = QTreeWidgetItem(["", "ブレ画像", "", ""])
-            self.result_tree.addTopLevelItem(duplicate_root)
-            self.result_tree.addTopLevelItem(blur_root)
+            duplicate_details = [
+                detail
+                for detail in details
+                if detail.summary.group_type in {"duplicate_image", "duplicate_video"}
+            ]
+            similar_details = [
+                detail for detail in details if detail.summary.group_type == "similar_image"
+            ]
+            blur_details = [
+                detail for detail in details if detail.summary.group_type == "blurry_image"
+            ]
 
-            for detail in details:
-                category = (
-                    blur_root
-                    if detail.summary.group_type == "blurry_image"
-                    else duplicate_root
-                )
-                self._add_detection_group_item(category, detail)
-
-            for root_item in (duplicate_root, blur_root):
-                if root_item.childCount() == 0:
-                    root_item.addChild(QTreeWidgetItem(["", "", "候補なし", ""]))
-                root_item.setExpanded(True)
-
-            self.result_tree.resizeColumnToContents(0)
-            self.result_tree.resizeColumnToContents(1)
+            self._populate_tree_with_groups(
+                self.duplicate_tree,
+                sorted(duplicate_details, key=self._duplicate_sort_key),
+            )
+            self._populate_tree_with_groups(
+                self.similar_tree,
+                sorted(similar_details, key=self._similarity_sort_key),
+            )
+            self._populate_tree_with_groups(
+                self.blur_tree,
+                sorted(blur_details, key=self._blur_sort_key),
+            )
         finally:
             self._populating_results_tree = False
+
+    def _clear_result_trees(self) -> None:
+        for tree in getattr(self, "result_trees", []):
+            tree.clear()
+
+    def _populate_tree_with_groups(
+        self,
+        tree: QTreeWidget,
+        details: list[object],
+    ) -> None:
+        if not details:
+            empty_item = QTreeWidgetItem(["", "", "候補なし", ""])
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            tree.addTopLevelItem(empty_item)
+        for detail in details:
+            self._add_detection_group_item(tree.invisibleRootItem(), detail)
+        tree.resizeColumnToContents(0)
+        tree.resizeColumnToContents(1)
 
     def _add_detection_group_item(
         self,
@@ -386,7 +422,7 @@ class MainWindow(QMainWindow):
             info = self._item_info_label(item)
             child = QTreeWidgetItem(
                 [
-                    selected_label,
+                    "",
                     item.media_type,
                     item.path,
                     info,
@@ -409,6 +445,34 @@ class MainWindow(QMainWindow):
             child.setIcon(2, self._thumbnail_icon(item.path, item.media_type))
             group_item.addChild(child)
         group_item.setExpanded(True)
+        group_item.setFlags(group_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+
+    def _duplicate_sort_key(self, detail: object) -> tuple[str, int]:
+        return (detail.summary.group_type, detail.summary.group_id)
+
+    def _similarity_sort_key(self, detail: object) -> tuple[int, str]:
+        hashes = [
+            item.perceptual_hash
+            for item in detail.items
+            if item.perceptual_hash is not None
+        ]
+        if len(hashes) < 2:
+            return (999, detail.items[0].path if detail.items else "")
+        minimum_distance = min(
+            hash_distance(left, right)
+            for left_index, left in enumerate(hashes)
+            for right in hashes[left_index + 1 :]
+        )
+        return (minimum_distance, detail.items[0].path if detail.items else "")
+
+    def _blur_sort_key(self, detail: object) -> tuple[float, str]:
+        scores = [
+            item.blur_score
+            for item in detail.items
+            if item.blur_score is not None
+        ]
+        blur_score = min(scores) if scores else float("inf")
+        return (blur_score, detail.items[0].path if detail.items else "")
 
     def _item_info_label(self, item: object) -> str:
         parts = [self._format_size(item.size_bytes), f"更新={item.modified_at}"]
@@ -445,7 +509,10 @@ class MainWindow(QMainWindow):
         return icon
 
     def _preview_selected_item(self) -> None:
-        items = self.result_tree.selectedItems()
+        sender = self.sender()
+        if not isinstance(sender, QTreeWidget):
+            return
+        items = sender.selectedItems()
         if not items:
             return
         item = items[0]
@@ -484,7 +551,6 @@ class MainWindow(QMainWindow):
         if group_item_id is None:
             return
         selected = item.checkState(0) == Qt.CheckState.Checked
-        item.setText(0, "隔離する" if selected else "残す")
         ResultService(self.database).set_detection_item_selected(int(group_item_id), selected)
         selected_count = self._selected_tree_item_count()
         self.has_quarantine_candidates = selected_count > 0
@@ -493,10 +559,11 @@ class MainWindow(QMainWindow):
 
     def _selected_tree_item_count(self) -> int:
         count = 0
-        for top_index in range(self.result_tree.topLevelItemCount()):
-            count += self._selected_tree_item_count_recursive(
-                self.result_tree.topLevelItem(top_index)
-            )
+        for tree in self.result_trees:
+            for top_index in range(tree.topLevelItemCount()):
+                count += self._selected_tree_item_count_recursive(
+                    tree.topLevelItem(top_index)
+                )
         return count
 
     def _selected_tree_item_count_recursive(self, item: QTreeWidgetItem) -> int:
@@ -535,8 +602,8 @@ class MainWindow(QMainWindow):
         worker = FunctionWorker(run_quarantine)
         worker.signals.succeeded.connect(self._quarantine_finished)
         worker.signals.failed.connect(self._worker_failed)
-        worker.signals.finished.connect(lambda: self._set_busy(False))
-        self.thread_pool.start(worker)
+        worker.signals.finished.connect(lambda: self._worker_finished(worker))
+        self._start_worker(worker)
 
     def _quarantine_finished(self, payload: object) -> None:
         result = payload
@@ -584,6 +651,15 @@ class MainWindow(QMainWindow):
     def _worker_failed(self, message: str) -> None:
         self.status_label.setText("処理に失敗しました。")
         QMessageBox.warning(self, "処理失敗", message)
+
+    def _start_worker(self, worker: FunctionWorker) -> None:
+        self.active_workers.append(worker)
+        self.thread_pool.start(worker)
+
+    def _worker_finished(self, worker: FunctionWorker) -> None:
+        self._set_busy(False)
+        if worker in self.active_workers:
+            self.active_workers.remove(worker)
 
     def _set_busy(self, busy: bool, message: str | None = None) -> None:
         self.add_folder_button.setEnabled(not busy)
