@@ -4,8 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from media_clinaer.analysis.blur_detector import calculate_blur_score
-from media_clinaer.analysis.hashing import calculate_sha256
-from media_clinaer.analysis.image_similarity import calculate_perceptual_hash
 from media_clinaer.config.models import AppConfig
 from media_clinaer.logging.events import EventType
 from media_clinaer.logging.logger import JsonLineLogger
@@ -113,11 +111,10 @@ class ScanService:
                             path=str(path),
                         )
                     else:
-                        sha256 = calculate_sha256(path)
+                        sha256 = None
                         perceptual_hash = None
                         blur_score = None
                         if metadata.media_type == "image":
-                            perceptual_hash = calculate_perceptual_hash(path)
                             blur_score = calculate_blur_score(path)
                         record = MediaFileRecord(
                             metadata=metadata,

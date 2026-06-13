@@ -12,8 +12,6 @@ class CacheService:
         row = self.repository.find_reusable(metadata)
         if row is None:
             return None
-        if metadata.media_type == "image" and row["perceptual_hash"] is None:
-            return None
         if metadata.media_type == "image" and row["blur_score"] is None:
             return None
         return MediaFileRecord(

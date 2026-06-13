@@ -8,8 +8,8 @@ class DetectionCandidate:
     media_file_id: int
     path: str
     media_type: str
-    sha256: str
     size_bytes: int
+    sha256: str | None = None
     perceptual_hash: str | None = None
     blur_score: float | None = None
 

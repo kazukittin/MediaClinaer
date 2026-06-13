@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 )
 
 from media_clinaer.app_context import AppContext
-from media_clinaer.analysis.image_similarity import hash_distance
 from media_clinaer.config.manager import ConfigManager
 from media_clinaer.config.models import AppConfig
 from media_clinaer.logging.logger import JsonLineLogger
@@ -112,13 +111,9 @@ class MainWindow(QMainWindow):
         candidates_layout.addWidget(selection_label)
 
         self.candidate_tabs = QTabWidget()
-        self.duplicate_tree = self._create_result_tree()
-        self.similar_tree = self._create_result_tree()
         self.blur_tree = self._create_result_tree()
-        self.result_trees = [self.duplicate_tree, self.similar_tree, self.blur_tree]
-        self.candidate_tabs.addTab(self.duplicate_tree, "重複画像")
-        self.candidate_tabs.addTab(self.similar_tree, "類似画像")
-        self.candidate_tabs.addTab(self.blur_tree, "ブレ画像")
+        self.result_trees = [self.blur_tree]
+        self.candidate_tabs.addTab(self.blur_tree, "低品質候補")
         candidates_layout.addWidget(self.candidate_tabs, stretch=2)
 
         self.preview_label = QLabel("画像を選択するとプレビューを表示します。")
@@ -204,7 +199,7 @@ class MainWindow(QMainWindow):
                 self.database,
                 self.logger,
                 self.config,
-            ).detect_duplicates(scan_result.session_id, progress_callback=progress)
+            ).detect_quality_issues(scan_result.session_id, progress_callback=progress)
             progress(
                 {
                     "phase": "loading_results",
@@ -240,19 +235,12 @@ class MainWindow(QMainWindow):
             f"キャッシュ利用: {scan_result.cache_used_count} 件",
             f"エラー: {scan_result.error_count} 件",
             "",
-            f"完全重複グループ: {detection_result.duplicate_group_count} 件",
-            f"重複候補ファイル: {detection_result.duplicate_item_count} 件",
-            f"類似画像グループ: {detection_result.similar_group_count} 件",
-            f"類似画像候補ファイル: {detection_result.similar_item_count} 件",
-            f"ブレ画像候補: {detection_result.blurry_item_count} 件",
+            f"低品質画像グループ: {detection_result.blurry_group_count} 件",
+            f"低品質画像候補: {detection_result.blurry_item_count} 件",
         ]
         lines.append("")
         lines.append("検出グループ詳細")
-        total_group_count = (
-            detection_result.duplicate_group_count
-            + detection_result.similar_group_count
-            + detection_result.blurry_group_count
-        )
+        total_group_count = detection_result.blurry_group_count
         if total_group_count > len(details):
             lines.append(
                 f"表示件数が多いため、先頭 {len(details)} / {total_group_count} "
@@ -274,14 +262,9 @@ class MainWindow(QMainWindow):
                     if item.blur_score is not None
                     else ""
                 )
-                phash_label = (
-                    f", pHash={item.perceptual_hash}"
-                    if item.perceptual_hash is not None
-                    else ""
-                )
                 lines.append(
                     f"  - {selected_label}: {item.path} "
-                    f"({size_label}, 更新={item.modified_at}{blur_label}{phash_label})"
+                    f"({size_label}, 更新={item.modified_at}{blur_label})"
                 )
         self.results.setPlainText("\n".join(lines))
         self._populate_result_tree(details)
@@ -330,19 +313,15 @@ class MainWindow(QMainWindow):
         if phase == "scanning":
             return "画像と映像を解析しています。"
         if phase == "detecting":
-            return "重複・類似・ブレを検出しています。"
+            return "低品質画像を検出しています。"
         if phase == "loading_results":
             return "表示する候補一覧を読み込んでいます。"
         return "処理中です。"
 
     def _group_label(self, group_type: str) -> str:
-        if group_type == "duplicate_image":
-            return "重複画像"
-        if group_type == "duplicate_video":
-            return "重複映像"
         if group_type == "blurry_image":
             return "ブレ画像"
-        return "類似画像"
+        return "低品質画像"
 
     def _format_size(self, size_bytes: int) -> str:
         if size_bytes < 1024:
@@ -355,26 +334,10 @@ class MainWindow(QMainWindow):
         self._populating_results_tree = True
         self._clear_result_trees()
         try:
-            duplicate_details = [
-                detail
-                for detail in details
-                if detail.summary.group_type in {"duplicate_image", "duplicate_video"}
-            ]
-            similar_details = [
-                detail for detail in details if detail.summary.group_type == "similar_image"
-            ]
             blur_details = [
                 detail for detail in details if detail.summary.group_type == "blurry_image"
             ]
 
-            self._populate_tree_with_groups(
-                self.duplicate_tree,
-                sorted(duplicate_details, key=self._duplicate_sort_key),
-            )
-            self._populate_tree_with_groups(
-                self.similar_tree,
-                sorted(similar_details, key=self._similarity_sort_key),
-            )
             self._populate_tree_with_groups(
                 self.blur_tree,
                 sorted(blur_details, key=self._blur_sort_key),
@@ -447,24 +410,6 @@ class MainWindow(QMainWindow):
         group_item.setExpanded(True)
         group_item.setFlags(group_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
 
-    def _duplicate_sort_key(self, detail: object) -> tuple[str, int]:
-        return (detail.summary.group_type, detail.summary.group_id)
-
-    def _similarity_sort_key(self, detail: object) -> tuple[int, str]:
-        hashes = [
-            item.perceptual_hash
-            for item in detail.items
-            if item.perceptual_hash is not None
-        ]
-        if len(hashes) < 2:
-            return (999, detail.items[0].path if detail.items else "")
-        minimum_distance = min(
-            hash_distance(left, right)
-            for left_index, left in enumerate(hashes)
-            for right in hashes[left_index + 1 :]
-        )
-        return (minimum_distance, detail.items[0].path if detail.items else "")
-
     def _blur_sort_key(self, detail: object) -> tuple[float, str]:
         scores = [
             item.blur_score
@@ -478,8 +423,6 @@ class MainWindow(QMainWindow):
         parts = [self._format_size(item.size_bytes), f"更新={item.modified_at}"]
         if item.blur_score is not None:
             parts.append(f"blur={item.blur_score:.2f}")
-        if item.perceptual_hash is not None:
-            parts.append(f"pHash={item.perceptual_hash}")
         return ", ".join(parts)
 
     def _thumbnail_icon(self, path: str, media_type: str) -> QIcon:

@@ -11,7 +11,6 @@ requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.7",
     "Pillow>=10.0",
-    "ImageHash>=4.3",
     "opencv-python>=4.9",
     "tzdata>=2025.2",
 ]
@@ -19,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+]
+build = [
+    "PyInstaller>=6.0",
 ]
 
 [project.scripts]

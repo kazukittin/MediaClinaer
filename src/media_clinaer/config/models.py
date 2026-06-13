@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
+
+
+def _filtered_dataclass_kwargs(model_type: type, data: dict[str, Any]) -> dict[str, Any]:
+    valid_names = {item.name for item in fields(model_type)}
+    return {key: value for key, value in data.items() if key in valid_names}
 
 
 @dataclass
@@ -26,11 +31,7 @@ class ScanConfig:
 
 @dataclass
 class DetectionConfig:
-    enable_duplicate_images: bool = True
-    enable_similar_images: bool = True
     enable_blurry_images: bool = True
-    enable_duplicate_videos: bool = True
-    similar_image_hash_distance: int = 8
     blur_threshold: float = 100.0
 
 
@@ -70,10 +71,17 @@ class AppConfig:
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
         return cls(
             version=int(data.get("version", 1)),
-            paths=PathConfig(**data.get("paths", {})),
-            scan=ScanConfig(**data.get("scan", {})),
-            detection=DetectionConfig(**data.get("detection", {})),
-            cache=CacheConfig(**data.get("cache", {})),
-            quarantine=QuarantineConfig(**data.get("quarantine", {})),
-            ui=UiConfig(**data.get("ui", {})),
+            paths=PathConfig(**_filtered_dataclass_kwargs(PathConfig, data.get("paths", {}))),
+            scan=ScanConfig(**_filtered_dataclass_kwargs(ScanConfig, data.get("scan", {}))),
+            detection=DetectionConfig(
+                **_filtered_dataclass_kwargs(DetectionConfig, data.get("detection", {}))
+            ),
+            cache=CacheConfig(**_filtered_dataclass_kwargs(CacheConfig, data.get("cache", {}))),
+            quarantine=QuarantineConfig(
+                **_filtered_dataclass_kwargs(
+                    QuarantineConfig,
+                    data.get("quarantine", {}),
+                )
+            ),
+            ui=UiConfig(**_filtered_dataclass_kwargs(UiConfig, data.get("ui", {}))),
         )
